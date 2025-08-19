@@ -200,12 +200,12 @@ async function main() {
 
         if (cam.producers.video && now - cam.monitor.lastVideoAliveAt > INACTIVE_TIMEOUT_MS) {
           console.warn(`[LIVENESS] video inactive > ${INACTIVE_TIMEOUT_MS}ms cam=${cam.id}; closing video`);
-          try { await cam.producers.video.close(); } catch {}
+          try { await cam.producers.video.close(); } catch { }
           cam.producers.video = null;
         }
         if (cam.producers.audio && now - cam.monitor.lastAudioAliveAt > INACTIVE_TIMEOUT_MS) {
           console.warn(`[LIVENESS] audio inactive > ${INACTIVE_TIMEOUT_MS}ms cam=${cam.id}; closing audio`);
-          try { await cam.producers.audio.close(); } catch {}
+          try { await cam.producers.audio.close(); } catch { }
           cam.producers.audio = null;
         }
 
@@ -216,8 +216,8 @@ async function main() {
 
         if (bothDead) {
           console.warn(`[LIVENESS] removing camera ${cam.id} after inactivity`);
-          try { if (cam.transports.videoPlain) await cam.transports.videoPlain.close(); } catch {}
-          try { if (cam.transports.audioPlain) await cam.transports.audioPlain.close(); } catch {}
+          try { if (cam.transports.videoPlain) await cam.transports.videoPlain.close(); } catch { }
+          try { if (cam.transports.audioPlain) await cam.transports.audioPlain.close(); } catch { }
           clearInterval(cam.monitor.timer);
           cam.monitor.timer = null;
           cameras.delete(cam.id);
@@ -274,7 +274,7 @@ async function main() {
       transport.on('dtlsstatechange', (s) => console.log(`[WebRTC] ${transport.id} dtlsstate:`, s));
       transport.on('@close', () => {
         console.log(`[WebRTC] ${transport.id} closed`);
-        webrtcTransports.delete(transport.id);  
+        webrtcTransports.delete(transport.id);
       });
 
       res.json({
@@ -479,7 +479,7 @@ async function main() {
       if (cam.producers.audio) await cam.producers.audio.close();
       if (cam.transports.videoPlain) await cam.transports.videoPlain.close();
       if (cam.transports.audioPlain) await cam.transports.audioPlain.close();
-    } catch {}
+    } catch { }
     clearInterval(cam.monitor?.timer);
     cameras.delete(cam.id);
     viewers.delete(cam.id);

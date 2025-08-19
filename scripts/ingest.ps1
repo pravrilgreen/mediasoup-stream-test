@@ -5,22 +5,22 @@
 # ==============================
 # Config (EDIT HERE)
 # ==============================
-$ServerUrl        = "http://127.0.0.1:3000"
+$ServerUrl = "http://127.0.0.1:3000"
 
 # Video quality
 $VideoBitrateKbps = 8000
-$Fps              = 30
-$GopSeconds       = 1
-$ProfileLevelId   = "42e01f"
+$Fps = 30
+$GopSeconds = 1
+$ProfileLevelId = "42e01f"
 
 # Payload type & SSRC
-$VideoPT          = 96
-$AudioPT          = 97
-$BaseVideoSSRC    = 222222
-$BaseAudioSSRC    = 111111
+$VideoPT = 96
+$AudioPT = 97
+$BaseVideoSSRC = 222222
+$BaseAudioSSRC = 111111
 
 # Audio control: 1 = no audio, 0 = include audio
-$NoAudio          = 0  
+$NoAudio = 0  
 
 # Video list
 $VideoList = @(
@@ -49,7 +49,7 @@ $Global:FFmpegPids = [System.Collections.Concurrent.ConcurrentBag[int]]::new()
 
 function Stop-MyFfmpeg {
   param(
-    [Parameter(Mandatory=$true)][string]$ServerHost,
+    [Parameter(Mandatory = $true)][string]$ServerHost,
     [int[]]$PortsToMatch = @()
   )
   try {
@@ -65,7 +65,8 @@ function Stop-MyFfmpeg {
         }
       }
     }
-  } catch {}
+  }
+  catch {}
 }
 
 # ==============================
@@ -81,7 +82,8 @@ if (-not (Test-Path $testDir)) { New-Item -ItemType Directory -Path $testDir | O
 try {
   $uri = [System.Uri]$ServerUrl
   $serverHost = $uri.DnsSafeHost
-} catch {
+}
+catch {
   Die "Invalid ServerUrl: $ServerUrl"
 }
 
@@ -98,7 +100,7 @@ Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
 # ==============================
 for ($idx = 0; $idx -lt $VideoList.Count; $idx++) {
   $VideoPath = $VideoList[$idx]
-  $CamName   = "Video-test-$($idx + 1)"
+  $CamName = "Video-test-$($idx + 1)"
   $VideoSSRC = $BaseVideoSSRC + $idx
   $AudioSSRC = $BaseAudioSSRC + $idx
 
@@ -129,11 +131,13 @@ for ($idx = 0; $idx -lt $VideoList.Count; $idx++) {
           Write-Warning "Skipping $VideoPath (download failed)."
           continue
         }
-      } else {
+      }
+      else {
         Write-Host "==> Found existing video file: $TmpVideoPath"
       }
       $VideoPath = $TmpVideoPath
-    } else {
+    }
+    else {
       if (-not (Test-Path $VideoPath)) {
         Write-Warning "Skipping $VideoPath (file not found)."
         continue
@@ -148,10 +152,10 @@ for ($idx = 0; $idx -lt $VideoList.Count; $idx++) {
       continue
     }
 
-    $camId         = $resp.id
-    $videoRtpPort  = $resp.video.rtpPort
+    $camId = $resp.id
+    $videoRtpPort = $resp.video.rtpPort
     $videoRtcpPort = $resp.video.rtcpPort
-    $audioRtpPort  = $resp.audio.rtpPort
+    $audioRtpPort = $resp.audio.rtpPort
     $audioRtcpPort = $resp.audio.rtcpPort
 
     Write-Host ("CAMERA_ID      : {0}" -f $camId)
@@ -216,11 +220,12 @@ for ($idx = 0; $idx -lt $VideoList.Count; $idx++) {
           profileLevelId = $ProfileLevelId
         }
         audio = @{
-          payloadType    = [int]$AudioPT
-          ssrc           = [int]$AudioSSRC
+          payloadType = [int]$AudioPT
+          ssrc        = [int]$AudioSSRC
         }
       }
-    } else {
+    }
+    else {
       $bodyObj = @{
         video = @{
           payloadType    = [int]$VideoPT
@@ -241,7 +246,8 @@ for ($idx = 0; $idx -lt $VideoList.Count; $idx++) {
     Write-Host "Open $ServerUrl -> Refresh -> Play Selected."
     Write-Host "========================================"
 
-  } catch {
+  }
+  catch {
     Write-Warning "Skipping $CamName due to error: $_"
     continue
   }

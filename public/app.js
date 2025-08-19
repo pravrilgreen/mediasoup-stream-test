@@ -135,7 +135,7 @@ async function playOne(id, streamInfo) {
     if (!cv.error) {
       const cV = await recvTransport.consume({ id: cv.id, producerId: cv.producerId, kind: cv.kind, rtpParameters: cv.rtpParameters });
       players.get(id).consumers.push(cV);
-      try { await cV.resume(); } catch {}
+      try { await cV.resume(); } catch { }
       players.get(id).mediaStream.addTrack(cV.track);
     } else { toast(`Failed to subscribe video: ${cv.error}`, 'err', 4000); }
   }
@@ -145,7 +145,7 @@ async function playOne(id, streamInfo) {
     if (!ca.error) {
       const cA = await recvTransport.consume({ id: ca.id, producerId: ca.producerId, kind: ca.kind, rtpParameters: ca.rtpParameters });
       players.get(id).consumers.push(cA);
-      try { cA.resume?.(); } catch {}
+      try { cA.resume?.(); } catch { }
       players.get(id).mediaStream.addTrack(cA.track);
     } else { toast(`Failed to subscribe audio: ${ca.error}`, 'warn', 3500); }
   }
@@ -154,7 +154,7 @@ async function playOne(id, streamInfo) {
   p.videoEl.muted = true; p.videoEl.volume = 1; p.videoEl.srcObject = p.mediaStream;
 
   try { await p.videoEl.play(); card.onVideoReady(); attachRVFC(p.videoEl); }
-  catch { card.showTapToPlay(() => p.videoEl.play().catch(() => {})); }
+  catch { card.showTapToPlay(() => p.videoEl.play().catch(() => { })); }
 
   p.timers.stats = setInterval(() => updateStats(id), 1000);
 }
@@ -163,7 +163,7 @@ function removeCard(id) {
   const p = players.get(id); if (!p) return;
   try {
     if (p.timers.stats) clearInterval(p.timers.stats);
-    for (const c of p.consumers) { try { c.close?.(); } catch {} }
+    for (const c of p.consumers) { try { c.close?.(); } catch { } }
     if (p.mediaStream) { for (const tr of p.mediaStream.getTracks()) tr.stop(); }
   } finally {
     p.videoEl.srcObject = null;
@@ -267,7 +267,7 @@ function createCard(id, streamInfo) {
       try {
         const r = await (await API(`/cameras/${id}/viewers`)).json();
         openViewerModal(id, r.ips || []);
-      } catch {}
+      } catch { }
     };
   }
 
@@ -300,7 +300,7 @@ function createCard(id, streamInfo) {
     muteBtn.onclick = () => { video.muted = !video.muted; syncAudIcon(); };
   }
 
-  el.querySelector('[data-pip]').onclick = async () => { if ('requestPictureInPicture' in video) { try { await video.requestPictureInPicture(); } catch {} } };
+  el.querySelector('[data-pip]').onclick = async () => { if ('requestPictureInPicture' in video) { try { await video.requestPictureInPicture(); } catch { } } };
   el.querySelector('[data-fs]').onclick = () => { const wrap = el.querySelector('.videoWrap'); if (document.fullscreenElement) document.exitFullscreen(); else wrap.requestFullscreen?.(); };
   btnStats.onclick = () => {
     const hidden = statsBox.hasAttribute('hidden');
@@ -465,30 +465,177 @@ function muteAll() {
 /* ---------- Viewer Modal ---------- */
 const viewerModal = document.getElementById('viewerModal');
 const viewerModalBody = document.getElementById('viewerModalBody');
-document.getElementById('viewerModalClose').onclick = () => viewerModal.setAttribute('hidden','');
-function openViewerModal(camId, ips=[]) {
+document.getElementById('viewerModalClose').onclick = () => viewerModal.setAttribute('hidden', '');
+function openViewerModal(camId, ips = []) {
   viewerModalBody.innerHTML = `<div style="margin-bottom:8px">Camera ID: <code>${escapeHtml(camId)}</code></div>` +
     (ips.length ? ips.map(ip => `<div class="ip">• ${escapeHtml(ip)}</div>`).join('') : '<div class="ip">No viewers</div>');
   viewerModal.removeAttribute('hidden');
 }
 
-/* ---------- Lightbox ---------- */
+/* ---------- Lightbox (zoom/pan, no fullscreen) ---------- */
 const lightbox = document.getElementById('lightbox');
 const lightboxBody = document.getElementById('lightboxBody');
-document.getElementById('lightboxClose').onclick = () => lightbox.setAttribute('hidden','');
+document.getElementById('lightboxClose').onclick = () => lightbox.setAttribute('hidden', '');
+
 function openLightbox(url) {
   lightboxBody.innerHTML = '';
+
+  // Videos keep default behavior
   if (/\.(mp4|webm|ogg)(\?|#|$)/i.test(url)) {
     const v = document.createElement('video');
-    v.src = url; v.controls = true; v.autoplay = true; v.style.maxWidth = '100%'; v.style.maxHeight = '70vh';
+    v.src = url; v.controls = true; v.autoplay = true;
+    v.style.maxWidth = '100%'; v.style.maxHeight = '92vh';
     lightboxBody.appendChild(v);
-  } else {
-    const img = document.createElement('img');
-    img.src = url; img.style.maxWidth = '100%'; img.style.maxHeight = '70vh'; img.alt = 'preview';
-    lightboxBody.appendChild(img);
+    lightbox.removeAttribute('hidden');
+    return;
   }
+
+  // Images: zoom/pan with auto-center when zoomed out to min
+  const wrap = document.createElement('div');
+  wrap.className = 'zoomWrap';
+
+  const img = document.createElement('img');
+  img.className = 'zoomImg';
+  img.src = url;
+  img.alt = 'preview';
+
+  wrap.appendChild(img);
+  lightboxBody.appendChild(wrap);
   lightbox.removeAttribute('hidden');
+
+  let scale = 1;
+  let minScale = 1;
+  const maxScale = 6;
+  let tx = 0, ty = 0; // translate in CSS pixels
+  let isPanning = false;
+  let panStartX = 0, panStartY = 0;
+
+  const EPS = 1e-3;
+
+  function dims() {
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const iw = img.naturalWidth || img.width || 1;
+    const ih = img.naturalHeight || img.height || 1;
+    return { W, H, iw, ih };
+  }
+
+  function centerInWrap() {
+    const { W, H, iw, ih } = dims();
+    tx = (W - iw * scale) / 2;
+    ty = (H - ih * scale) / 2;
+  }
+
+  function fitOnce() {
+    const { W, H, iw, ih } = dims();
+    const s = Math.min(W / iw, H / ih);
+    // Do not upscale initially
+    scale = Math.min(1, s);
+    minScale = scale;
+    centerInWrap();
+    applyTransform();
+  }
+
+  function applyTransform() {
+    img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+  }
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function onWheel(e) {
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const prev = scale;
+    const factor = Math.exp((-e.deltaY) * 0.0015); // smooth zoom
+    scale = clamp(prev * factor, minScale, maxScale);
+
+    if (Math.abs(scale - minScale) <= EPS) {
+      // Snap back to centered when hitting min scale
+      scale = minScale;
+      centerInWrap();
+    } else {
+      // Keep cursor point stationary
+      tx = mx - (mx - tx) * (scale / prev);
+      ty = my - (my - ty) * (scale / prev);
+    }
+
+    applyTransform();
+  }
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    isPanning = true;
+    wrap.classList.add('grabbing');
+    panStartX = e.clientX - tx;
+    panStartY = e.clientY - ty;
+    wrap.setPointerCapture?.(e.pointerId);
+  }
+  function onPointerMove(e) {
+    if (!isPanning) return;
+    tx = e.clientX - panStartX;
+    ty = e.clientY - panStartY;
+    applyTransform();
+  }
+  function onPointerUp(e) {
+    isPanning = false;
+    wrap.classList.remove('grabbing');
+    wrap.releasePointerCapture?.(e.pointerId);
+  }
+
+  function onDblClick(e) {
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    if (Math.abs(scale - minScale) <= EPS) {
+      // Zoom in from min -> 2x around cursor
+      const prev = scale;
+      scale = Math.min(2, maxScale);
+      tx = mx - (mx - tx) * (scale / prev);
+      ty = my - (my - ty) * (scale / prev);
+    } else {
+      // Back to min and re-center
+      scale = minScale;
+      centerInWrap();
+    }
+    applyTransform();
+  }
+
+  function onResize() {
+    // When resized, refit baseline; if currently at min scale, re-center at min
+    const atMin = Math.abs(scale - minScale) <= EPS;
+    fitOnce();
+    if (!atMin) applyTransform();
+  }
+
+  img.addEventListener('load', fitOnce, { once: true });
+  wrap.addEventListener('wheel', onWheel, { passive: false });
+  wrap.addEventListener('pointerdown', onPointerDown);
+  wrap.addEventListener('pointermove', onPointerMove);
+  wrap.addEventListener('pointerup', onPointerUp);
+  wrap.addEventListener('pointerleave', onPointerUp);
+  wrap.addEventListener('dblclick', onDblClick);
+  window.addEventListener('resize', onResize, { passive: true });
+
+  // Clean up listeners on close
+  const cleanup = () => {
+    window.removeEventListener('resize', onResize);
+    wrap.removeEventListener('wheel', onWheel);
+    wrap.removeEventListener('pointerdown', onPointerDown);
+    wrap.removeEventListener('pointermove', onPointerMove);
+    wrap.removeEventListener('pointerup', onPointerUp);
+    wrap.removeEventListener('pointerleave', onPointerUp);
+    wrap.removeEventListener('dblclick', onDblClick);
+  };
+  const obs = new MutationObserver((muts) => {
+    if (lightbox.hasAttribute('hidden')) { cleanup(); obs.disconnect(); }
+  });
+  obs.observe(lightbox, { attributes: true, attributeFilter: ['hidden'] });
 }
+
 
 /* ---------- Utils ---------- */
 function escapeHtml(s = '') { return s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
@@ -524,9 +671,9 @@ const Chat = (() => {
   let pendingAttachment = null;
 
   function isOpen() { return !panel.hasAttribute('hidden'); }
-  function open()  { panel.removeAttribute('hidden'); setTimeout(() => list.scrollTop = list.scrollHeight, 0); }
-  function close() { panel.setAttribute('hidden',''); hideEmoji(); }
-  fab.onclick = () => (isOpen() ? close() : open());
+  function open() { panel.removeAttribute('hidden'); setTimeout(() => list.scrollTop = list.scrollHeight, 0); }
+  function close() { panel.setAttribute('hidden', ''); hideEmoji(); }
+  fab.onclick = () => open();
   btnClose.onclick = close;
 
   // ESC to close
@@ -546,10 +693,14 @@ const Chat = (() => {
   function connectSSE() {
     if (es) { es.close(); es = null; }
     es = new EventSource(`/chat/stream`);
-    es.onmessage = (e) => { appendMsg(JSON.parse(e.data), true); };
+    es.onmessage = (e) => {
+      const wasClosed = !isOpen();
+      appendMsg(JSON.parse(e.data), true);
+      if (wasClosed) showNotify();
+    };
   }
 
-  async function loadHistory(initial=false) {
+  async function loadHistory(initial = false) {
     const q = new URLSearchParams({ limit: '60' });
     if (lastLoadedMinId) q.set('beforeId', String(lastLoadedMinId));
     const r = await (await API(`/chat/history?${q.toString()}`)).json();
@@ -564,24 +715,45 @@ const Chat = (() => {
     }
   }
 
-  function hash(s) { let h=2166136261>>>0; for (let i=0;i<s.length;i++) { h ^= s.charCodeAt(i); h = (h*16777619)>>>0; } return h>>>0; }
+  function hash(s) { let h = 2166136261 >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; } return h >>> 0; }
   function avatarDataUrl(ip) {
     const h = hash(ip);
     const hue = h % 360;
     const fg = `hsl(${hue},70%,55%)`;
-    const bg = `hsl(${(h+180)%360},30%,18%)`;
+    const bg = `hsl(${(h + 180) % 360},30%,18%)`;
     const cells = [];
-    for (let r=0;r<5;r++) {
-      let rowBits = (h >> (r*5)) & 31;
+    for (let r = 0; r < 5; r++) {
+      let rowBits = (h >> (r * 5)) & 31;
       const row = [];
-      for (let c=0;c<3;c++) { row.push((rowBits>>c)&1); }
+      for (let c = 0; c < 3; c++) { row.push((rowBits >> c) & 1); }
       const mirror = [row[1], row[0]];
       cells.push([...row, ...mirror]);
     }
     let rects = '';
-    for (let r=0;r<5;r++) for (let c=0;c<5;c++) if (cells[r][c]) rects += `<rect x="${c}" y="${r}" width="1" height="1" rx="0.2" ry="0.2"/>`;
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++) if (cells[r][c]) rects += `<rect x="${c}" y="${r}" width="1" height="1" rx="0.2" ry="0.2"/>`;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 5"><rect width="5" height="5" fill="${bg}"/><g fill="${fg}">${rects}</g></svg>`;
     return 'data:image/svg+xml;base64,' + btoa(svg);
+  }
+
+  function emojify(text = '') {
+    // Basic emoticon -> emoji replacements
+    const rules = [
+      [/(^|[\s])(:-?\))/g, "$1🙂"],
+      [/(^|[\s])(:-?\()/g, "$1🙁"],
+      [/(^|[\s]);-?\)/g, "$1😉"],
+      [/(^|[\s])(:-?D)/gi, "$1😃"],
+      [/(^|[\s])([xX]-?D)/g, "$1😆"],
+      [/(^|[\s])(:-?[pP])/g, "$1😛"],
+      [/(^|[\s])(:-?[oO])/g, "$1😮"],
+      [/(^|[\s])(:-?\|)/g, "$1😐"],
+      [/(^|[\s])(:'\()/g, "$1😢"],
+      [/(^|[\s])(:-?\*)/g, "$1😘"],
+      [/(^|[\s])<3/g, "$1❤️"],
+      [/(^|[\s])(:-?\/)/g, "$1😕"],
+    ];
+    let out = text;
+    for (const [re, rep] of rules) out = out.replace(re, rep);
+    return out;
   }
 
   function renderMsg(m) {
@@ -598,7 +770,7 @@ const Chat = (() => {
     const d = new Date(m.ts || Date.now());
     meta.textContent = `${m.ip || '?'} • ${d.toLocaleTimeString()}`;
     const content = document.createElement('div'); content.className = 'content';
-    if (m.text) content.textContent = m.text;
+    if (m.text) content.textContent = emojify(m.text);
 
     b.appendChild(meta);
     if (m.text) b.appendChild(content);
@@ -631,7 +803,7 @@ const Chat = (() => {
     form.classList.toggle('has-attach', !!fileObj);
 
     if (!fileObj) {
-      attachPreview.setAttribute('hidden','');
+      attachPreview.setAttribute('hidden', '');
       attachPreviewMedia.innerHTML = '';
       return;
     }
@@ -711,14 +883,14 @@ const Chat = (() => {
     const raw = await res.text();
 
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status} ${res.statusText}: ${raw.slice(0,200)}`);
+      throw new Error(`HTTP ${res.status} ${res.statusText}: ${raw.slice(0, 200)}`);
     }
 
     let data;
     try {
       data = ct.includes('application/json') ? JSON.parse(raw) : { url: raw };
     } catch {
-      throw new Error(`Expected JSON, got: ${raw.slice(0,200)}`);
+      throw new Error(`Expected JSON, got: ${raw.slice(0, 200)}`);
     }
 
     if (!data.url) throw new Error(`Server response missing "url"`);
@@ -748,10 +920,10 @@ const Chat = (() => {
     }
   };
 
-  async function send(text, mediaUrl=null, mediaType=null) {
+  async function send(text, mediaUrl = null, mediaType = null) {
     const body = { text, mediaUrl, imageUrl: mediaUrl, mediaType }; // send both keys for compatibility
     const r = await (await API('/chat/send', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     })).json();
     if (r.error) throw new Error(r.error);
     // message will arrive via SSE
@@ -759,15 +931,15 @@ const Chat = (() => {
 
   // ========== Emoji ==========
   function showEmoji() { emojiPanel.removeAttribute('hidden'); }
-  function hideEmoji() { emojiPanel.setAttribute('hidden',''); }
+  function hideEmoji() { emojiPanel.setAttribute('hidden', ''); }
   emojiBtn.onclick = () => { emojiPanel.hasAttribute('hidden') ? buildEmojiOnceAndShow() : hideEmoji(); };
 
   function insertEmoji(char) {
     // Insert into textarea at caret
     const start = input.selectionStart ?? input.value.length;
-    const end   = input.selectionEnd ?? input.value.length;
-    const v     = input.value;
-    input.value = v.slice(0,start) + char + v.slice(end);
+    const end = input.selectionEnd ?? input.value.length;
+    const v = input.value;
+    input.value = v.slice(0, start) + char + v.slice(end);
     const pos = start + char.length;
     input.selectionStart = input.selectionEnd = pos;
     input.focus();
@@ -777,22 +949,22 @@ const Chat = (() => {
     if (emojiPanel._built) { showEmoji(); return; }
 
     const EMOJIS = [
-      "😀","😃","😄","😁","😆","😂","🤣","😊","😇","🙂","🙃",
-      "😍","🥰","😘","😗","☺️","😚","😙","🥲",
-      "😋","😛","😜","🤪","😝","🤑","😉","🤭","🤫","🤗","🤔",
-      "🤐","🤨","😐","😑","😶","😴","😪","😮‍💨",
-      "😮","😯","😲","😳","🥺","😦","😧","😨","😰","😥","😢","😭",
-      "😱","😖","😣","😞","😓","😩","😫","🥱","😤","😡","😠",
-      "🤒","🤕","🤢","🤮","🤧","🥵","🥶","😷",
-      "🤯","🥳","😎","🤓","🧐","🤠","🫡","🫠","🫥","🫢","🫣",
-      "😈","👿","😇",
-      "💋","❤️‍🔥","❤️‍🩹"
+      "😀", "😃", "😄", "😁", "😆", "😂", "🤣", "😊", "😇", "🙂", "🙃",
+      "😍", "🥰", "😘", "😗", "☺️", "😚", "😙", "🥲",
+      "😋", "😛", "😜", "🤪", "😝", "🤑", "😉", "🤭", "🤫", "🤗", "🤔",
+      "🤐", "🤨", "😐", "😑", "😶", "😴", "😪", "😮‍💨",
+      "😮", "😯", "😲", "😳", "🥺", "😦", "😧", "😨", "😰", "😥", "😢", "😭",
+      "😱", "😖", "😣", "😞", "😓", "😩", "😫", "🥱", "😤", "😡", "😠",
+      "🤒", "🤕", "🤢", "🤮", "🤧", "🥵", "🥶", "😷",
+      "🤯", "🥳", "😎", "🤓", "🧐", "🤠", "🫡", "🫠", "🫥", "🫢", "🫣",
+      "😈", "👿", "😇",
+      "💋", "❤️‍🔥", "❤️‍🩹"
     ];
 
     const frag = document.createDocumentFragment();
     EMOJIS.forEach(e => {
-      const b=document.createElement('button'); b.type='button'; b.textContent=e;
-      b.onclick=()=>insertEmoji(e);
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = e;
+      b.onclick = () => insertEmoji(e);
       frag.appendChild(b);
     });
     emojiPanel.appendChild(frag);
