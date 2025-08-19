@@ -1,15 +1,20 @@
 // Minimal mediasoup forwarder (CommonJS)
-// PlainRTP ingest from FFmpeg -> WebRTC to browser (audio + video),
-// với logging, liveness monitor, và auto-remove dead cameras.
+// PlainRTP (FFmpeg) -> WebRTC to browser (audio + video)
+// + Chat (SQLite, SSE, image/video upload), viewer counting by IP,
+// liveness monitor, auto-remove dead cameras.
+// NOTE: English-only code & comments.
 
 const express = require('express');
 const cors = require('cors');
 const mediasoup = require('mediasoup');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const Database = require('better-sqlite3');
 const debugConsumers = new Map();
 
-// -------- Config (local single-machine defaults) --------
+// -------- Config --------
 const LISTEN_IP = '0.0.0.0';
 const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '127.0.0.1';
 const WEB_PORT = parseInt(process.env.WEB_PORT || '3000', 10);
@@ -44,7 +49,6 @@ const ROUTER_CODECS = [
   }
 ];
 
-
 const WEBRTC_OPTS = {
   listenIps: [{ ip: LISTEN_IP, announcedIp: ANNOUNCED_IP }],
   enableUdp: true,
@@ -54,31 +58,77 @@ const WEBRTC_OPTS = {
   minimumAvailableOutgoingBitrate: 300000
 };
 
-// Payload types & SSRC defaults (khớp FFmpeg script: video PT=96, audio PT=97)
-const DEFAULTS = {
-  videoPt: 96,
-  audioPt: 97,
-  videoSsrc: 222222,
-  audioSsrc: 111111,
-  h264ProfileLevelId: '42e01f'
-};
+// PT/SSRC defaults (matches FFmpeg script: video PT=96, audio PT=97)
+const DEFAULTS = { videoPt: 96, audioPt: 97, videoSsrc: 222222, audioSsrc: 111111, h264ProfileLevelId: '42e01f' };
 
 // Liveness monitor
-const LIVENESS_CHECK_INTERVAL_MS = 5000;
-const INACTIVE_TIMEOUT_MS = 5000;
-const DEAD_REMOVE_TIMEOUT_MS = 3000;
+const LIVENESS_CHECK_INTERVAL_MS = 1000;
+const INACTIVE_TIMEOUT_MS = 1000;
+const DEAD_REMOVE_TIMEOUT_MS = 1000;
+
+// ---- Chat (SQLite): latest 10k queue (global) ----
+const DB_PATH = path.join(__dirname, 'chat.db');
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.prepare(`
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  room TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  text TEXT,
+  imageUrl TEXT
+)
+`).run();
+db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_room_id ON messages(room, id DESC)`).run();
+const insertMsg = db.prepare(`INSERT INTO messages(ts, room, ip, text, imageUrl) VALUES (?,?,?,?,?)`);
+const getHistory = db.prepare(`
+  SELECT id, ts, room, ip, text, imageUrl
+  FROM messages
+  WHERE room = ? AND id < COALESCE(?, 9223372036854775807)
+  ORDER BY id DESC
+  LIMIT ?
+`);
+function trimMessages() {
+  // Keep only the newest 10,000 rows globally (queue semantics).
+  db.prepare(`
+    DELETE FROM messages
+    WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 10000)
+  `).run();
+}
+
+// ---- Uploads (images & videos) ----
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+fs.mkdirSync(uploadsDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: uploadsDir,
+  filename: (_req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '.bin').toLowerCase();
+    cb(null, `${Date.now()}_${uuidv4()}${ext}`);
+  }
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 20MB
+  fileFilter: (_req, file, cb) => {
+    const ok = (file.mimetype || '').startsWith('image/') || (file.mimetype || '').startsWith('video/');
+    if (ok) cb(null, true); else cb(new Error('Only images or videos are allowed'));
+  }
+});
+
+// ---- Helpers ----
+function getIP(req) {
+  const xf = req.headers['x-forwarded-for'];
+  if (xf) return String(xf).split(',')[0].trim();
+  return req.ip || req.connection?.remoteAddress || '';
+}
 
 async function main() {
   const app = express();
-
-  // Basic HTTP logging
-  app.use((req, _res, next) => {
-    console.log(`[HTTP] ${req.method} ${req.url}`);
-    next();
-  });
+  app.set('trust proxy', true);
 
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ---- mediasoup bootstrap ----
@@ -94,12 +144,23 @@ async function main() {
   });
   console.log('[MS] Worker created');
 
-  const router = await worker.createRouter({ mediaCodecs: ROUTER_CODECS });
-  console.log('[MS] Router created with codecs');
+  const router = await worker.createRouter({
+    mediaCodecs: ROUTER_CODECS,
+    rtpHeaderExtensions: [
+      { uri: 'urn:ietf:params:rtp-hdrext:sdes:mid', id: 1, encrypt: false },
+      { uri: 'http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time', id: 4, encrypt: false },
+      { uri: 'urn:ietf:params:rtp-hdrext:ssrc-audio-level', id: 10, encrypt: false },
+      { uri: 'http://www.webrtc.org/experiments/rtp-hdrext/playout-delay', id: 14, encrypt: false }
+    ]
+  });
+  console.log('[MS] Router created');
 
   // State
   const webrtcTransports = new Map(); // id -> WebRTC RecvTransport
+  const transportClients = new Map(); // transportId -> { ip, ua }
   const cameras = new Map();          // id -> { name, transports, producers, monitor }
+  const viewers = new Map();          // camId -> Map<ip, refCount>
+  const consumerIndex = new Map();    // consumerId -> { camId, ip }
 
   // ---- Liveness monitor helpers ----
   function startMonitor(camId) {
@@ -116,7 +177,6 @@ async function main() {
 
     async function poll() {
       try {
-        // video stats
         if (cam.transports.videoPlain) {
           const vs = await cam.transports.videoPlain.getStats().catch(() => []);
           const v0 = Array.isArray(vs) && vs[0] ? vs[0] : null;
@@ -126,7 +186,6 @@ async function main() {
             cam.monitor.lastVideoAliveAt = Date.now();
           }
         }
-        // audio stats
         if (cam.transports.audioPlain) {
           const as = await cam.transports.audioPlain.getStats().catch(() => []);
           const a0 = Array.isArray(as) && as[0] ? as[0] : null;
@@ -139,30 +198,30 @@ async function main() {
 
         const now = Date.now();
 
-        // close producers when inactive
         if (cam.producers.video && now - cam.monitor.lastVideoAliveAt > INACTIVE_TIMEOUT_MS) {
-          console.warn(`[LIVENESS] video inactive > ${INACTIVE_TIMEOUT_MS}ms on cam ${cam.id}; closing video producer`);
+          console.warn(`[LIVENESS] video inactive > ${INACTIVE_TIMEOUT_MS}ms cam=${cam.id}; closing video`);
           try { await cam.producers.video.close(); } catch {}
           cam.producers.video = null;
         }
         if (cam.producers.audio && now - cam.monitor.lastAudioAliveAt > INACTIVE_TIMEOUT_MS) {
-          console.warn(`[LIVENESS] audio inactive > ${INACTIVE_TIMEOUT_MS}ms on cam ${cam.id}; closing audio producer`);
+          console.warn(`[LIVENESS] audio inactive > ${INACTIVE_TIMEOUT_MS}ms cam=${cam.id}; closing audio`);
           try { await cam.producers.audio.close(); } catch {}
           cam.producers.audio = null;
         }
 
-        // auto-remove camera if both tracks dead for long enough
         const bothDead =
           !cam.producers.video && !cam.producers.audio &&
           (now - cam.monitor.lastVideoAliveAt > DEAD_REMOVE_TIMEOUT_MS) &&
           (now - cam.monitor.lastAudioAliveAt > DEAD_REMOVE_TIMEOUT_MS);
 
         if (bothDead) {
-          console.warn(`[LIVENESS] removing camera ${cam.id} after ${DEAD_REMOVE_TIMEOUT_MS}ms inactivity`);
+          console.warn(`[LIVENESS] removing camera ${cam.id} after inactivity`);
           try { if (cam.transports.videoPlain) await cam.transports.videoPlain.close(); } catch {}
           try { if (cam.transports.audioPlain) await cam.transports.audioPlain.close(); } catch {}
-          stopMonitor(cam.id);
+          clearInterval(cam.monitor.timer);
+          cam.monitor.timer = null;
           cameras.delete(cam.id);
+          viewers.delete(cam.id);
         }
       } catch (e) {
         console.error('[LIVENESS] poll error', e);
@@ -171,33 +230,52 @@ async function main() {
 
     if (cam.monitor.timer) clearInterval(cam.monitor.timer);
     cam.monitor.timer = setInterval(poll, LIVENESS_CHECK_INTERVAL_MS);
-    console.log(`[LIVENESS] monitor started for cam ${camId}`);
   }
 
-  function stopMonitor(camId) {
-    const cam = cameras.get(camId);
-    if (!cam || !cam.monitor) return;
-    clearInterval(cam.monitor.timer);
-    cam.monitor.timer = null;
-    console.log(`[LIVENESS] monitor stopped for cam ${camId}`);
+  // Viewers helpers
+  function addViewer(camId, ip, consumerId) {
+    if (!ip) return;
+    let m = viewers.get(camId);
+    if (!m) { m = new Map(); viewers.set(camId, m); }
+    m.set(ip, (m.get(ip) || 0) + 1);
+    consumerIndex.set(consumerId, { camId, ip });
+  }
+  function removeByConsumer(consumerId) {
+    const rec = consumerIndex.get(consumerId);
+    if (!rec) return;
+    const m = viewers.get(rec.camId);
+    if (m) {
+      const cnt = (m.get(rec.ip) || 1) - 1;
+      if (cnt <= 0) m.delete(rec.ip); else m.set(rec.ip, cnt);
+      if (m.size === 0) viewers.delete(rec.camId);
+    }
+    consumerIndex.delete(consumerId);
+  }
+  function findCamByProducerId(pid) {
+    for (const cam of cameras.values()) {
+      if (cam.producers.video && cam.producers.video.id === pid) return cam;
+      if (cam.producers.audio && cam.producers.audio.id === pid) return cam;
+    }
+    return null;
   }
 
   // ---- REST API ----
   app.get('/health', (_req, res) => res.json({ ok: true }));
+  app.get('/whoami', (req, res) => res.json({ ip: getIP(req), ua: req.get('user-agent') || '' }));
 
-  app.get('/rtpCapabilities', (_req, res) => {
-    console.log('[API] GET /rtpCapabilities');
-    res.json(router.rtpCapabilities);
-  });
+  app.get('/rtpCapabilities', (_req, res) => res.json(router.rtpCapabilities));
 
-  app.post('/createWebRtcTransport', async (_req, res) => {
+  app.post('/createWebRtcTransport', async (req, res) => {
     try {
       const transport = await router.createWebRtcTransport(WEBRTC_OPTS);
+
       webrtcTransports.set(transport.id, transport);
 
-      console.log('[API] POST /createWebRtcTransport ->', transport.id);
       transport.on('dtlsstatechange', (s) => console.log(`[WebRTC] ${transport.id} dtlsstate:`, s));
-      transport.on('@close', () => console.log(`[WebRTC] ${transport.id} closed`));
+      transport.on('@close', () => {
+        console.log(`[WebRTC] ${transport.id} closed`);
+        webrtcTransports.delete(transport.id);  
+      });
 
       res.json({
         id: transport.id,
@@ -216,8 +294,8 @@ async function main() {
       const { transportId, dtlsParameters } = req.body || {};
       const transport = webrtcTransports.get(transportId);
       if (!transport) return res.status(404).json({ error: 'transport not found' });
+
       await transport.connect({ dtlsParameters });
-      console.log('[API] POST /connectWebRtcTransport -> connected', transportId);
       res.json({ connected: true });
     } catch (e) {
       console.error('connectWebRtcTransport error', e);
@@ -232,10 +310,10 @@ async function main() {
         id: cam.id,
         name: cam.name,
         hasVideo: !!cam.producers.video,
-        hasAudio: !!cam.producers.audio
+        hasAudio: !!cam.producers.audio,
+        viewerCount: viewers.get(cam.id)?.size || 0
       });
     }
-    console.log('[API] GET /streams ->', out.length);
     res.json(out);
   });
 
@@ -247,14 +325,11 @@ async function main() {
       const common = {
         listenIp: { ip: LISTEN_IP, announcedIp: ANNOUNCED_IP },
         rtcpMux: false,
-        comedia: true // passive; learn remote tuple from first RTP
+        comedia: true
       };
 
       const videoPlain = await router.createPlainTransport(common);
       const audioPlain = await router.createPlainTransport(common);
-
-      videoPlain.on('tuple', (t) => console.log(`[Plain] video tuple cam=${id}`, t));
-      audioPlain.on('tuple', (t) => console.log(`[Plain] audio tuple cam=${id}`, t));
 
       const cam = {
         id,
@@ -265,8 +340,6 @@ async function main() {
       };
       cameras.set(id, cam);
       startMonitor(id);
-
-      console.log('[API] POST /cameras/createPlainRtp ->', id, cam.name);
 
       res.json({
         id,
@@ -320,9 +393,6 @@ async function main() {
             encodings: [{ ssrc: video.ssrc }]
           }
         });
-        console.log(`[PRODUCE] video producer created cam=${cam.id} pid=${cam.producers.video.id}`);
-        console.log('[DEBUG] video producer RTP params:',
-          JSON.stringify(cam.producers.video.rtpParameters, null, 2));
       }
 
       if (!cam.producers.audio && audio) {
@@ -339,9 +409,6 @@ async function main() {
             encodings: [{ ssrc: audio.ssrc }]
           }
         });
-        console.log(`[PRODUCE] audio producer created cam=${cam.id} pid=${cam.producers.audio.id}`);
-        console.log('[DEBUG] audio producer RTP params:',
-          JSON.stringify(cam.producers.audio.rtpParameters, null, 2));
       }
 
       res.json({
@@ -357,16 +424,19 @@ async function main() {
     }
   });
 
-
   app.get('/cameras/:id/producers', (req, res) => {
     const cam = cameras.get(req.params.id);
     if (!cam) return res.status(404).json({ error: 'camera not found' });
-    const out = {
+    res.json({
       videoProducerId: cam.producers.video?.id || null,
       audioProducerId: cam.producers.audio?.id || null
-    };
-    console.log('[API] GET /cameras/:id/producers ->', cam.id, out);
-    res.json(out);
+    });
+  });
+
+  app.get('/cameras/:id/viewers', (req, res) => {
+    const map = viewers.get(req.params.id);
+    const ips = map ? Array.from(map.keys()) : [];
+    res.json({ count: ips.length, ips });
   });
 
   app.post('/consume', async (req, res) => {
@@ -376,26 +446,18 @@ async function main() {
       if (!transport) return res.status(404).json({ error: 'transport not found' });
 
       if (!router.canConsume({ producerId, rtpCapabilities })) {
-        console.warn('[CONSUME] cannot consume', {
-          producerId, codecs: rtpCapabilities?.codecs?.map(c => c.mimeType)
-        });
         return res.status(400).json({ error: 'cannot consume' });
       }
 
-      const consumer = await transport.consume({
-        producerId,
-        rtpCapabilities,
-        paused: false
-      });
+      const consumer = await transport.consume({ producerId, rtpCapabilities, paused: false });
 
       debugConsumers.set(consumer.id, consumer);
-      consumer.on('@close', () => debugConsumers.delete(consumer.id));
+      consumer.on('@close', () => { debugConsumers.delete(consumer.id); removeByConsumer(consumer.id); });
+      consumer.on('transportclose', () => { removeByConsumer(consumer.id); });
 
-      const ssrcs = (consumer.rtpParameters.encodings || []).map(e => e.ssrc).filter(Boolean);
-      const codec = consumer.rtpParameters.codecs?.[0]?.mimeType || 'unknown';
-      console.log(`[CONSUME] t=${transportId} kind=${consumer.kind} codec=${codec} ssrc=${ssrcs.join(',')}`);
-      console.log('[DEBUG] consumer RTP params:',
-        JSON.stringify(consumer.rtpParameters, null, 2));
+      const cam = findCamByProducerId(producerId);
+      const ip = getIP(req);
+      if (cam && ip) addViewer(cam.id, ip, consumer.id);
 
       res.json({
         id: consumer.id,
@@ -403,15 +465,12 @@ async function main() {
         kind: consumer.kind,
         rtpParameters: consumer.rtpParameters
       });
-
     } catch (e) {
       console.error('consume error', e);
       res.status(500).json({ error: String(e) });
     }
   });
 
-
-  // Manual cleanup (optional)
   app.post('/cameras/:id/close', async (req, res) => {
     const cam = cameras.get(req.params.id);
     if (!cam) return res.status(404).json({ error: 'camera not found' });
@@ -421,13 +480,83 @@ async function main() {
       if (cam.transports.videoPlain) await cam.transports.videoPlain.close();
       if (cam.transports.audioPlain) await cam.transports.audioPlain.close();
     } catch {}
-    stopMonitor(cam.id);
+    clearInterval(cam.monitor?.timer);
     cameras.delete(cam.id);
-    console.log('[CLOSE] camera removed', req.params.id);
+    viewers.delete(cam.id);
     res.json({ ok: true });
   });
 
-  // ---- Debug endpoints ----
+  // ---- Chat APIs ----
+
+  // Upload image or video
+  app.post('/chat/upload', upload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'no file' });
+    const url = `/uploads/${path.basename(req.file.path)}`;
+    res.json({ url });
+  });
+
+  // Send message (server stamps IP)
+  app.post('/chat/send', (req, res) => {
+    try {
+      const room = 'global'; // global only
+      const text = (req.body.text || '').slice(0, 4000);
+      const imageUrl = req.body.imageUrl ? String(req.body.imageUrl).slice(0, 1024) : null;
+      const ip = getIP(req);
+      const ts = Date.now();
+
+      const info = insertMsg.run(ts, room, ip, text.trim() || null, imageUrl);
+      const message = { id: Number(info.lastInsertRowid), ts, room, ip, text: text || null, imageUrl: imageUrl || null };
+
+      trimMessages();
+      publish(room, message);
+      res.json({ ok: true, message });
+    } catch (e) {
+      console.error('chat/send error', e);
+      res.status(500).json({ error: String(e) });
+    }
+  });
+
+  // Load history (pagination by beforeId)
+  app.get('/chat/history', (req, res) => {
+    try {
+      const room = 'global';
+      const limit = Math.min(parseInt(req.query.limit || '100', 10), 200);
+      const beforeId = req.query.beforeId ? parseInt(req.query.beforeId, 10) : null;
+      const rows = getHistory.all(room, beforeId, limit);
+      res.json({ messages: rows });
+    } catch (e) {
+      console.error('chat/history error', e);
+      res.status(500).json({ error: String(e) });
+    }
+  });
+
+  // SSE stream realtime
+  const chatSubs = new Set(); // global only
+  function publish(_room, msg) {
+    const data = `data: ${JSON.stringify(msg)}\n\n`;
+    for (const res of chatSubs) res.write(data);
+  }
+
+  app.get('/chat/stream', (req, res) => {
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive'
+    });
+    res.flushHeaders?.();
+
+    res.write(':ok\n\n');
+    chatSubs.add(res);
+
+    const ping = setInterval(() => res.write(':ping\n\n'), 15000);
+
+    req.on('close', () => {
+      clearInterval(ping);
+      chatSubs.delete(res);
+    });
+  });
+
+  // ---- Debug ----
   app.get('/debug/cameras', async (_req, res) => {
     const out = [];
     for (const cam of cameras.values()) {
@@ -435,46 +564,11 @@ async function main() {
         id: cam.id,
         name: cam.name,
         hasVideo: !!cam.producers.video,
-        hasAudio: !!cam.producers.audio
+        hasAudio: !!cam.producers.audio,
+        viewerCount: viewers.get(cam.id)?.size || 0
       });
     }
     res.json(out);
-  });
-
-  app.get('/debug/cameras/:id/stats', async (req, res) => {
-    const cam = cameras.get(req.params.id);
-    if (!cam) return res.status(404).json({ error: 'camera not found' });
-
-    const vStats = await cam.transports.videoPlain.getStats().catch(() => []);
-    const aStats = await cam.transports.audioPlain.getStats().catch(() => []);
-    const v = Array.isArray(vStats) && vStats[0] ? vStats[0] : {};
-    const a = Array.isArray(aStats) && aStats[0] ? aStats[0] : {};
-
-    res.json({
-      id: cam.id,
-      name: cam.name,
-      videoPlain: {
-        bytesReceived: v.bytesReceived ?? null,
-        packetsReceived: v.packetsReceived ?? null,
-        tuple: cam.transports.videoPlain?.tuple ?? null
-      },
-      audioPlain: {
-        bytesReceived: a.bytesReceived ?? null,
-        packetsReceived: a.packetsReceived ?? null,
-        tuple: cam.transports.audioPlain?.tuple ?? null
-      },
-      producers: {
-        video: cam.producers.video ? cam.producers.video.id : null,
-        audio: cam.producers.audio ? cam.producers.audio.id : null
-      }
-    });
-  });
-
-  app.get('/debug/webrtc/:id/stats', async (req, res) => {
-    const t = webrtcTransports.get(req.params.id);
-    if (!t) return res.status(404).json({ error: 'transport not found' });
-    const st = await t.getStats().catch(() => []);
-    res.json(st);
   });
 
   app.get('/debug/consumers', (_req, res) => {

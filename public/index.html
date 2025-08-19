@@ -1,163 +1,22 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Mediasoup Monitor — Blue Pro v2</title>
-<style>
-  /* ===================== Blue Pro Design System ===================== */
-  :root{
-    --bg:#0b1020; --panel:#111831; --panel-2:#0e1530; --card:#0f1736;
-    --text:#eaf0ff; --muted:#9bb0d4;
-    --blue:#2563eb; --blue-2:#3b82f6; --cyan:#22d3ee;
-    --ok:#1ad07a; --ok-text:#dfffea; --ok-bg:rgba(26,208,122,.14);
-    --info:#3b82f6; --info-text:#e7f0ff; --info-bg:rgba(59,130,246,.14);
-    --danger:#ff6b7a;
-    --border:1px solid rgba(255,255,255,.09);
-    --shadow:0 12px 28px rgba(0,0,0,.35);
-    --radius:10px; --radius-lg:12px;
-    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    --sans: ui-sans-serif,system-ui,-apple-system,Inter,Segoe UI,Roboto,Ubuntu,Arial;
-    --focus:0 0 0 3px rgba(37,99,235,.4);
-  }
-  [data-theme="light"]{
-    --bg:#f5f8ff; --panel:#ffffff; --panel-2:#eef3ff; --card:#ffffff;
-    --text:#0c1326; --muted:#5d6f90; --border:1px solid rgba(12,19,38,.12); --shadow:0 10px 20px rgba(12,19,38,.08);
-    --ok-text:#0c2b18; --ok-bg:rgba(26,208,122,.17); --info-text:#0c1b40; --info-bg:rgba(59,130,246,.17);
-  }
-  *{box-sizing:border-box}
-  html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans)}
-  /* Prevent text caret on non-editable text (but allow inputs) */
-  .no-select, .no-select *:not(input):not(textarea){user-select:none;cursor:default}
-
-  /* ===================== Header (flat, modern) ===================== */
-  .topbar{position:sticky;top:0;z-index:70;background:var(--panel);border-bottom:var(--border)}
-  .topbar__inner{max-width:1400px;margin:auto;padding:12px 16px;display:flex;gap:16px;align-items:center}
-  .brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:.3px;font-size:20px}
-  .brand .logo{width:24px;height:24px;border-radius:6px;background:linear-gradient(135deg,var(--blue),var(--blue-2))}
-  .search{display:flex;align-items:center;gap:8px;background:var(--panel-2);border:var(--border);border-radius:8px;padding:8px 12px;min-width:280px}
-  .search input{background:transparent;border:none;outline:0;color:var(--text);width:220px;user-select:text;cursor:text}
-  .hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center}
-  .themeBtn{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:var(--border);background:var(--panel-2);border-radius:8px;cursor:pointer}
-  .themeBtn:focus{outline:none;box-shadow:var(--focus)}
-
-  /* ===================== Command Bar (modes + counters) ===================== */
-  .command{position:sticky;top:56px;z-index:65;background:var(--panel);border-bottom:var(--border)}
-  .command__inner{max-width:1400px;margin:auto;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  .seg{display:inline-flex;border:var(--border);border-radius:8px;overflow:hidden}
-  .seg button{padding:8px 12px;border:none;background:transparent;color:var(--text);cursor:pointer}
-  .seg button[aria-pressed="true"]{background:rgba(37,99,235,.18)}
-  .counters{display:flex;gap:8px;margin-left:auto}
-  .chip{font-family:var(--mono);padding:6px 10px;border-radius:8px;border:var(--border);background:var(--panel-2)}
-  .chip.ok{background:var(--ok-bg);color:var(--ok-text);border-color:rgba(26,208,122,.35)}
-  .chip.info{background:var(--info-bg);color:var(--info-text);border-color:rgba(59,130,246,.35)}
-
-  /* ===================== Layout ===================== */
-  .shell{max-width:1400px;margin:16px auto;padding:0 16px;display:grid;grid-template-columns:320px 1fr;gap:16px}
-  .sidebar{background:var(--panel);border:var(--border);border-radius:var(--radius-lg);padding:12px;box-shadow:var(--shadow);min-height:calc(100vh - 190px)}
-  .sideHdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-  /* Segmented sidebar actions (Select/Clear/Play/Stop) */
-  .segSmall{display:inline-flex;border:var(--border);border-radius:8px;overflow:hidden}
-  .segSmall button{padding:7px 10px;border:none;background:transparent;color:var(--text);cursor:pointer;white-space:nowrap}
-  .segSmall button:hover{background:rgba(59,130,246,.15)}
-  .streams{display:flex;flex-direction:column;gap:8px;overflow-y:auto;overflow-x:hidden;max-height:calc(100vh - 270px);padding-right:6px}
-
-  /* Stream row — fixed icon/play columns; long IDs truncate with … ; NO horizontal scrolling */
-  .row{
-    display:grid;
-    grid-template-columns:22px minmax(0,1fr) 48px min-content;
-    align-items:center;gap:10px;padding:10px;border:var(--border);border-radius:8px;background:var(--panel-2)
-  }
-  .row .name{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .row .id{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .row .icons{display:flex;gap:6px;justify-content:flex-end;width:48px}
-  .row .icons .ico{font-size:15px}
-  .playBtn button{padding:6px 10px;border:var(--border);background:var(--panel);color:var(--text);border-radius:6px;cursor:pointer}
-  .row input[type="checkbox"]{width:18px;height:18px}
-
-  /* ===================== Grid / Cards ===================== */
-  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));align-content:start;min-height:60vh;padding-bottom:90px}
-  body.view--theater .grid{grid-template-columns:1fr}
-  body.view--list .grid{grid-template-columns:1fr}
-
-  .card{position:relative;background:var(--card);border:var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
-  .card__hd{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:var(--border)}
-  .title{font-weight:800;display:flex;gap:8px;align-items:center}
-  .badge{font-size:12px;padding:3px 8px;border-radius:6px;border:var(--border);background:rgba(37,99,235,.15)}
-
-  .videoWrap{position:relative;aspect-ratio:16/9;background:#000}
-  body.view--list .videoWrap{aspect-ratio:21/9}
-  video{width:100%;height:100%;display:block;object-fit:contain;background:#000;transition:transform .22s ease}
-  /* Hover: tiny bounce down + gentle zoom */
-  .videoWrap:hover video{transform:translateY(2px) scale(1.012)}
-
-  /* Always-visible control strip at bottom of video */
-  .overlay{
-    position:absolute;left:0;right:0;bottom:0;z-index:3;
-    padding:8px 10px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.68));
-    display:flex;gap:10px;align-items:flex-end;justify-content:space-between;flex-wrap:nowrap
-  }
-  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .btn, .toggle{padding:8px 12px;border:var(--border);background:var(--panel);color:var(--text);border-radius:8px;cursor:pointer}
-  .btn:hover{transform:translateY(-1px)} .btn:focus{outline:none;box-shadow:var(--focus)}
-  .toggle[aria-pressed="true"]{background:rgb(30, 125, 168)}
-
-  /* In GRID mode: stack action buttons vertically to avoid clipping */
-  body.view--grid .overlay .controls{flex-direction:column;align-items:flex-start}
-  body.view--grid .overlay{align-items:flex-end}
-
-  /* Stats pill: high-contrast on black frames */
-  .stats{
-    margin-left:auto;display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:12px;
-    background:rgba(10,15,30,.88);color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.7);
-    padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,.14)
-  }
-  .stats[hidden]{display:none}
-
-  .meters{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px;border-top:var(--border);background:var(--panel)}
-  .meter{height:16px;border-radius:4px;background:rgba(255,255,255,.07);overflow:hidden;position:relative}
-  .meter>span{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--blue),var(--blue-2));transition:width .6s ease}
-  .meter .meterText{position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:12px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.7)}
-  .meter .label{position:absolute;right:8px;top:-18px;font-size:12px;color:var(--muted)}
-
-  .skeleton{position:absolute;inset:0;background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(255,255,255,.14),rgba(255,255,255,.06));animation:shimmer 1.2s linear infinite}
-  @keyframes shimmer{0%{transform:translateX(-40%)}100%{transform:translateX(40%)}}
-
-  /* Range (volume) — fully draggable */
-  .range{width:130px;height:8px;background:transparent;cursor:pointer}
-  .range:focus{outline:none;box-shadow:var(--focus)}
-  .range::-webkit-slider-runnable-track{height:8px;background:rgba(255,255,255,.18);border-radius:999px}
-  .range::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:4px;background:var(--blue);margin-top:-4px;border:none}
-  .range::-moz-range-track{height:8px;background:rgba(255,255,255,.18);border-radius:999px}
-  .range::-moz-range-thumb{width:16px;height:16px;border-radius:4px;background:var(--blue);border:none}
-
-  /* ===================== Bottom Control Dock (center) ===================== */
-  .dock{
-    position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:80;
-    display:flex;gap:10px;align-items:center;background:var(--panel);border:var(--border);border-radius:10px;box-shadow:var(--shadow);padding:8px 10px
-  }
-  .dock .group{display:flex;gap:8px;align-items:center}
-  .dock .toggle[aria-pressed="true"]{background:rgba(37,99,235,.18)}
-
-  /* ===================== Focus (single-stream) ===================== */
-  .focus{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.78);display:none;align-items:center;justify-content:center;padding:20px}
-  .focus.show{display:flex;animation:pop .18s ease-out both}
-  @keyframes pop{from{opacity:.6;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
-  .focusInner{width:min(1680px,98vw);max-height:94vh;display:flex;flex-direction:column;gap:10px}
-  .focusBar{display:flex;justify-content:space-between;align-items:center;background:var(--panel);border:var(--border);border-radius:10px;padding:8px 10px}
-  /* Focus: hide controls until hover (smooth fade/slide) */
-  .focus .overlay{opacity:0;transform:translateY(10px);pointer-events:none;transition:opacity .18s ease, transform .18s ease}
-  .focus .videoWrap:hover .overlay{opacity:1;transform:none;pointer-events:auto}
-  /* Make focused video a bit larger visually */
-  .focus .videoWrap{aspect-ratio:16/9}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>STREAM Dashboard</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="stylesheet" href="styles.css">
 </head>
+
 <body data-theme="dark" class="view--grid">
-  <!-- ===================== Header ===================== -->
+  <!-- Header -->
   <div class="topbar no-select">
     <div class="topbar__inner">
-      <div class="brand"><span class="logo"></span><span>STREAM Dashboard</span></div>
+      <div class="brand">
+        <img src="/favicon.png" alt="Logo" class="logo" style="height:24px;vertical-align:middle;margin-right:6px;" />
+        <span>STREAM Dashboard</span>
+      </div>
       <label class="search" title="Filter by name or ID">
         <span aria-hidden="true">🔎</span>
         <input id="filter" placeholder="Search streams..." autocomplete="off" />
@@ -168,7 +27,7 @@
     </div>
   </div>
 
-  <!-- ===================== Command Bar ===================== -->
+  <!-- Command bar -->
   <div class="command no-select">
     <div class="command__inner">
       <div class="seg" role="tablist" aria-label="View modes">
@@ -177,440 +36,91 @@
         <button id="viewList" role="tab" aria-pressed="false" title="List (compact stack)">List</button>
       </div>
       <div class="counters">
-        <span id="countStreams" class="chip ok"   title="Streams online">0 online</span>
+        <span id="countStreams" class="chip ok" title="Streams online">0 online</span>
         <span id="countPlayers" class="chip info" title="Players opened">0 playing</span>
       </div>
     </div>
   </div>
 
-  <!-- ===================== Main ===================== -->
+  <!-- Grid -->
   <div class="shell" role="main">
-    <!-- Sidebar -->
-    <aside class="sidebar no-select">
-      <div class="sideHdr">
-        <div style="font-weight:900">Streams</div>
-        <div class="segSmall" aria-label="Selection actions">
-          <button id="selectAll" title="Select all">Select</button>
-          <button id="clearSel" title="Clear selection">Clear</button>
-          <button id="playSelected" title="Play selected">Play</button>
-          <button id="stopSelected" title="Stop selected (if playing)">Stop</button>
-        </div>
-      </div>
-      <div id="streamList" class="streams" aria-live="polite"></div>
-      <div style="opacity:.8;font-size:12px;margin-top:8px">
-        Shortcuts: <b>G/T/L</b> view · <b>R</b> refresh · <b>M</b> mute · double-click a card for Focus · <b>Esc</b> exits Focus.
-      </div>
-    </aside>
-
-    <!-- Grid -->
     <section id="grid" class="grid no-select" aria-live="polite"></section>
   </div>
 
-  <!-- ===================== Focus (single-stream) ===================== -->
+  <!-- Focus view -->
   <div id="focus" class="focus" role="dialog" aria-modal="true" aria-label="Focused stream">
     <div class="focusInner">
-      <div class="focusBar no-select">
-        <div class="brand"><span class="logo"></span><span>Focus view</span></div>
-        <div><button id="exitFocus" class="btn" title="Return to grid">Exit</button></div>
-      </div>
       <div id="focusHost"></div>
     </div>
   </div>
 
-  <!-- ===================== Bottom Control Dock (center) ===================== -->
-  <div class="dock no-select" role="toolbar" aria-label="Global controls">
-    <div class="group">
-      <button id="autoRefresh" class="toggle" aria-pressed="true" title="Auto refresh the stream list every 5s">Auto</button>
-    </div>
-    <div class="group">
-      <button id="muteAll" class="btn" title="Mute all players">Mute all</button>
-      <button id="unmuteAll" class="btn" title="Unmute all players">Unmute all</button>
-      <button id="stopAll" class="btn" title="Stop and remove all players" style="border-color:rgba(255,107,122,.45);color:#ffd7dc">Stop all</button>
+  <!-- Viewer modal -->
+  <div id="viewerModal" class="modal" hidden>
+    <div class="modal__inner">
+      <div class="modal__hd">
+        <div class="title">👁 Viewers</div>
+        <button class="btn modal__close" id="viewerModalClose">✕</button>
+      </div>
+      <div id="viewerModalBody" class="modal__body"></div>
     </div>
   </div>
 
-  <div class="toastHost" id="toastHost" style="position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:95"></div>
+  <!-- Media lightbox -->
+  <div id="lightbox" class="modal" hidden>
+    <div class="modal__inner">
+      <div class="modal__hd">
+        <div class="title">Preview</div>
+        <button class="btn modal__close" id="lightboxClose">✕</button>
+      </div>
+      <div class="modal__body" id="lightboxBody"></div>
+    </div>
+  </div>
 
-  <!-- ===================== Script ===================== -->
-  <script type="module">
-    import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3.14.2';
-    const API = (p,o)=>fetch(p,o);
+  <!-- Toast host -->
+  <div class="toastHost" id="toastHost"
+    style="position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:95"></div>
 
-    /* ---------- State ---------- */
-    let device=null, recvTransport=null;
-    const players=new Map(); // id -> { el, consumers, mediaStream, videoEl, timers, lastStats, slider }
-    let currentStreams=[];
-    let focus={ id:null, placeholder:null };
+  <!-- Chat -->
+  <div id="chatBox" class="chat">
+    <div class="chat__tab" id="chatFab" title="Toggle chat">💬</div>
 
-    /* ---------- Refs ---------- */
-    const gridEl=document.querySelector('#grid');
-    const streamListEl=document.querySelector('#streamList');
-    const filterEl=document.querySelector('#filter');
-    const countStreamsEl=document.querySelector('#countStreams');
-    const countPlayersEl=document.querySelector('#countPlayers');
-    const toastHost=document.querySelector('#toastHost');
-    const focusEl=document.querySelector('#focus');
-    const focusHost=document.querySelector('#focusHost');
-
-    /* ---------- Toast ---------- */
-    function toast(msg,type='info',timeout=2200){
-      const t=document.createElement('div');
-      t.style.background='var(--panel)'; t.style.border='var(--border)';
-      t.style.borderLeft='4px solid '+(type==='err'?'var(--danger)':type==='warn'?'#ffb547':'var(--blue)');
-      t.style.padding='10px 14px'; t.style.borderRadius='8px'; t.textContent=msg;
-      toastHost.appendChild(t); setTimeout(()=>t.remove(),timeout);
-    }
-
-    /* ---------- Theme ---------- */
-    const themeBtn=document.querySelector('#toggleTheme');
-    (()=>{ const saved=localStorage.getItem('theme')||'dark'; document.body.dataset.theme=saved; })();
-    themeBtn.onclick=()=>{ const next=document.body.dataset.theme==='dark'?'light':'dark'; document.body.dataset.theme=next; localStorage.setItem('theme',next); themeBtn.innerText = (next==='dark'?'🌗 Theme':'🌞 Theme'); };
-
-    /* ---------- View modes ---------- */
-    const modeBtns={ grid:document.querySelector('#viewGrid'), theater:document.querySelector('#viewTheater'), list:document.querySelector('#viewList') };
-    function setView(mode){
-      document.body.classList.remove('view--grid','view--theater','view--list');
-      document.body.classList.add(`view--${mode}`);
-      Object.entries(modeBtns).forEach(([k,btn])=>btn.setAttribute('aria-pressed', k===mode?'true':'false'));
-      localStorage.setItem('view',mode);
-    }
-    setView(localStorage.getItem('view')||'grid');
-    modeBtns.grid.onclick=()=>setView('grid');
-    modeBtns.theater.onclick=()=>setView('theater');
-    modeBtns.list.onclick=()=>setView('list');
-
-    /* ---------- Keyboard ---------- */
-    window.addEventListener('keydown',(e)=>{
-      if(['INPUT','TEXTAREA'].includes((e.target.tagName||''))) return;
-      if(e.key==='g'||e.key==='G') setView('grid');
-      if(e.key==='t'||e.key==='T') setView('theater');
-      if(e.key==='l'||e.key==='L') setView('list');
-      if(e.key==='r'||e.key==='R') refreshList();
-      if(e.key==='m'||e.key==='M') muteAll();
-      if(e.key==='Escape') exitFocusMode();
-    });
-
-    /* ---------- Device / Transport ---------- */
-    async function loadDevice(){
-      if(device) return;
-      const routerRtpCapabilities = await (await API('/rtpCapabilities')).json();
-      device=new mediasoupClient.Device();
-      await device.load({ routerRtpCapabilities });
-    }
-    async function createRecvTransport(){
-      if(recvTransport) return;
-      const data=await (await API('/createWebRtcTransport',{method:'POST'})).json();
-      recvTransport=device.createRecvTransport({
-        id:data.id, iceParameters:data.iceParameters, iceCandidates:data.iceCandidates, dtlsParameters:data.dtlsParameters
-      });
-      recvTransport.on('connect', async({dtlsParameters},cb,errb)=>{
-        try{
-          await API('/connectWebRtcTransport',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transportId:recvTransport.id, dtlsParameters})});
-          cb();
-        }catch(e){ errb(e); }
-      });
-    }
-
-    /* ---------- Streams list ---------- */
-    async function refreshList(){
-      try{
-        const list=await (await API('/streams')).json();
-        currentStreams=list;
-        renderStreams(list, filterEl.value.trim().toLowerCase());
-        countStreamsEl.textContent=`${list.length} online`;
-        const alive=new Set(list.map(s=>s.id));
-        for(const id of Array.from(players.keys())) if(!alive.has(id)) stopOne(id);
-      }catch(e){ toast('Failed to fetch streams list','err'); }
-    }
-    function renderStreams(list,q=''){
-      streamListEl.innerHTML='';
-      const filtered=list.filter(s=>(s.name+s.id).toLowerCase().includes(q));
-      for(const s of filtered){
-        const row=document.createElement('div'); row.className='row';
-        row.innerHTML=`
-          <input type="checkbox" class="sel" title="Select stream"/>
-          <div class="meta">
-            <div class="name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</div>
-            <div class="id" title="${s.id}">${s.id}</div>
-          </div>
-          <div class="icons" aria-label="Capabilities">
-            ${s.hasVideo?'<span class="ico" title="Video">🎥</span>':''}
-            ${s.hasAudio?'<span class="ico" title="Audio">🔊</span>':''}
-          </div>
-          <div class="playBtn"><button class="btn" data-id="${s.id}" title="Play this stream">▶</button></div>
-        `;
-        row.querySelector('button.btn').onclick=()=>playOne(s.id);
-        row.ondblclick=()=>playOne(s.id);
-        streamListEl.appendChild(row);
-      }
-      countStreamsEl.textContent=`${filtered.length}/${list.length} online`;
-    }
-    filterEl.addEventListener('input',()=>renderStreams(currentStreams, filterEl.value.trim().toLowerCase()));
-
-    /* ---------- Play / Stop ---------- */
-    async function playOne(id){
-      if(players.has(id)){ players.get(id).el.scrollIntoView({behavior:'smooth',block:'center'}); return; }
-      if(!device) await loadDevice();
-      if(!recvTransport) await createRecvTransport();
-
-      const prods=await (await API(`/cameras/${id}/producers`)).json();
-      if(!prods.videoProducerId && !prods.audioProducerId){ toast('No producers for this camera. Start FFmpeg and call /produce.','warn',4000); return; }
-
-      const card=createCard(id);
-      gridEl.prepend(card.el);
-      players.set(id,{ el:card.el, consumers:[], mediaStream:new MediaStream(), videoEl:card.video, timers:{}, lastStats:{}, slider:card.slider });
-      updateCounters();
-
-      // Video
-      if(prods.videoProducerId){
-        const cv=await (await API('/consume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transportId:recvTransport.id,producerId:prods.videoProducerId,rtpCapabilities:device.rtpCapabilities})})).json();
-        if(!cv.error){
-          const cV=await recvTransport.consume({ id:cv.id, producerId:cv.producerId, kind:cv.kind, rtpParameters:cv.rtpParameters });
-          players.get(id).consumers.push(cV);
-          try{ await cV.resume(); }catch{}
-          players.get(id).mediaStream.addTrack(cV.track);
-        } else { toast(`Failed to subscribe video: ${cv.error}`,'err',4000); }
-      }
-      // Audio
-      if(prods.audioProducerId){
-        const ca=await (await API('/consume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transportId:recvTransport.id,producerId:prods.audioProducerId,rtpCapabilities:device.rtpCapabilities})})).json();
-        if(!ca.error){
-          const cA=await recvTransport.consume({ id:ca.id, producerId:ca.producerId, kind:ca.kind, rtpParameters:ca.rtpParameters });
-          players.get(id).consumers.push(cA);
-          try{ cA.resume?.(); }catch{}
-          players.get(id).mediaStream.addTrack(cA.track);
-        } else { toast(`Failed to subscribe audio: ${ca.error}`,'warn',3500); }
-      }
-
-      const p=players.get(id);
-      p.videoEl.muted=true; p.videoEl.volume=1; p.videoEl.srcObject=p.mediaStream;
-      try{ await p.videoEl.play(); card.onVideoReady(); attachRVFC(p.videoEl); }
-      catch{ card.showTapToPlay(()=> p.videoEl.play().catch(()=>{})); }
-
-      p.timers.stats=setInterval(()=>updateStats(id),1000);
-    }
-
-    function stopOne(id){
-      const p=players.get(id); if(!p) return;
-      try{
-        if(p.timers.stats) clearInterval(p.timers.stats);
-        for(const c of p.consumers){ try{ c.close?.(); }catch{} }
-        if(p.mediaStream){ for(const tr of p.mediaStream.getTracks()) tr.stop(); }
-      }finally{
-        p.videoEl.srcObject=null;
-        if(focus.id===id) exitFocusMode();
-        p.el.remove();
-        players.delete(id);
-        updateCounters();
-      }
-    }
-    function stopAll(){ for(const id of Array.from(players.keys())) stopOne(id); toast('All players closed'); }
-    document.querySelector('#stopAll').onclick=stopAll;
-    function updateCounters(){ countPlayersEl.textContent=`${players.size} playing`; }
-
-    /* ---------- Sidebar multi-select actions ---------- */
-    document.querySelector('#selectAll').onclick=()=>{ streamListEl.querySelectorAll('input.sel').forEach(cb=>cb.checked=true); };
-    document.querySelector('#clearSel').onclick=()=>{ streamListEl.querySelectorAll('input.sel').forEach(cb=>cb.checked=false); };
-    document.querySelector('#playSelected').onclick=async ()=>{
-      const ids=[...streamListEl.querySelectorAll('.row')].filter(r=>r.querySelector('input.sel')?.checked).map(r=>r.querySelector('button.btn').dataset.id);
-      if(ids.length===0){ toast('No streams selected','warn'); return; }
-      for(const id of ids) await playOne(id);
-    };
-    document.querySelector('#stopSelected').onclick=()=>{
-      const ids=[...streamListEl.querySelectorAll('.row')].filter(r=>r.querySelector('input.sel')?.checked).map(r=>r.querySelector('button.btn').dataset.id);
-      let n=0; for(const id of ids){ if(players.has(id)){ stopOne(id); n++; } }
-      toast(n?`Stopped ${n} player(s)`: 'Nothing to stop','info');
-    };
-
-    /* ---------- Card builder ---------- */
-    function createCard(id){
-      const el=document.createElement('div'); el.className='card'; el.dataset.id=id;
-      el.innerHTML=`
-        <div class="card__hd">
-          <div class="title"><span>📡</span><span>${escapeHtml(id)}</span></div>
-          <span class="badge" title="Live only (no replay)">LIVE</span>
+    <div class="chat__panel" id="chatPanel" hidden>
+      <div class="chat__hd">
+        <div class="chat__title">Chat</div>
+        <div class="chat__me" id="chatMe">—</div>
+        <div class="chat__tools">
+          <button id="chatClose" class="btn" title="Close">✕</button>
         </div>
-        <div class="videoWrap">
-          <div class="skeleton" data-skel></div>
-          <video playsinline autoplay></video>
-          <div class="overlay">
-            <div class="controls" title="Player controls">
-              <button class="btn" data-mute title="Toggle mute">🔊</button>
-              <input type="range" class="range" min="0" max="1" step="0.01" value="1" data-vol title="Volume"/>
-              <button class="btn" data-snap title="Screenshot (PNG)">📸</button>
-              <button class="btn" data-pip title="Picture-in-Picture">PiP</button>
-              <button class="btn" data-fs title="Fullscreen">⛶</button>
-              <button class="toggle" data-stats-toggle title="Show/Hide status" aria-pressed="true">Status</button>
-              <button class="btn" data-stop title="Close this player">✖</button>
-            </div>
-            <div class="stats" data-stats>
-              <span data-bitrate>0 kbps</span><span>|</span>
-              <span data-fps>0 fps</span><span>|</span>
-              <span data-size>0×0</span><span>|</span>
-              <span data-pl>0.0% loss</span>
-            </div>
+      </div>
+
+      <div id="chatList" class="chat__list"></div>
+
+      <!-- Composer -->
+      <form id="chatForm" class="chat__form">
+        <div class="chat__inputWrap" style="position:relative; flex:1">
+          <textarea id="chatInput" class="chat__input"
+            placeholder="Type a message… (Enter = send, Shift+Enter = newline)"></textarea>
+
+          <!-- Small preview lives inside the textbox (absolute) -->
+          <div id="attachPreview" class="attachPreview" hidden>
+            <button type="button" class="attachPreview__remove" title="Remove">✕</button>
+            <div class="attachPreview__media"></div>
           </div>
         </div>
-        <div class="meters no-select">
-          <div class="meter" title="Video bitrate">
-            <span class="meterText" data-meter-v-text>0 kbps</span>
-            <span data-meter-v></span>
-            <span class="label">Video</span>
-          </div>
-          <div class="meter" title="Audio bitrate">
-            <span class="meterText" data-meter-a-text>0 kbps</span>
-            <span data-meter-a></span>
-            <span class="label">Audio</span>
-          </div>
-        </div>
-      `;
-      const video=el.querySelector('video');
-      const skel=el.querySelector('[data-skel]');
-      const statsBox=el.querySelector('[data-stats]');
-      const btnStats=el.querySelector('[data-stats-toggle]');
-      const vol=el.querySelector('[data-vol]');
 
-      // Buttons
-      el.querySelector('[data-stop]').onclick=()=>stopOne(id);
-      el.querySelector('[data-pip]').onclick=async()=>{ if('requestPictureInPicture' in video) try{ await video.requestPictureInPicture(); }catch{} };
-      el.querySelector('[data-fs]').onclick=()=>{ const wrap=el.querySelector('.videoWrap'); if(document.fullscreenElement) document.exitFullscreen(); else wrap.requestFullscreen?.(); };
-      el.querySelector('[data-mute]').onclick=()=>{ video.muted=!video.muted; syncAudIcon(); };
-      btnStats.onclick=()=>{
-        const hidden = statsBox.hasAttribute('hidden');
-        if(hidden) statsBox.removeAttribute('hidden'); else statsBox.setAttribute('hidden','');
-        btnStats.setAttribute('aria-pressed', hidden ? 'true' : 'false');
-      };
-      el.querySelector('[data-snap]').onclick=()=>downloadSnapshot(video,id);
-      vol.oninput=()=>{ video.volume=Number(vol.value); if(video.volume>0) video.muted=false; syncAudIcon(); };
+        <input type="file" id="chatFile" accept="image/*,video/*" hidden />
+        <button type="button" id="chatAttach" class="btn" title="Attach image/video">📎</button>
+        <button type="button" id="emojiBtn" class="btn" title="Emoji">😊</button>
+        <button type="submit" class="btn">Send</button>
 
-      // Double-click to focus
-      el.addEventListener('dblclick', ()=> enterFocusMode(id));
+        <!-- Emoji popover -->
+        <div id="emojiPanel" class="picker" hidden></div>
+      </form>
 
-      function syncAudIcon(){ el.querySelector('[data-mute]').textContent = (video.muted || video.volume===0) ? '🔇' : '🔊'; }
-      function onVideoReady(){ skel.remove(); syncAudIcon(); }
-      function showTapToPlay(handler){
-        const btn=document.createElement('button');
-        btn.className='btn'; btn.style.position='absolute'; btn.style.left='50%'; btn.style.top='50%'; btn.style.transform='translate(-50%,-50%)';
-        btn.textContent='Tap to play'; btn.onclick=()=>{ handler(); btn.remove(); };
-        el.querySelector('.videoWrap').appendChild(btn);
-      }
+    </div>
+  </div>
 
-      return { el, video, onVideoReady, showTapToPlay, slider:vol };
-    }
-
-    /* ---------- Stats ---------- */
-    async function updateStats(id){
-      const p=players.get(id); if(!p) return;
-      let vBytes=0,aBytes=0,lost=0,rx=0;
-      try{
-        for(const c of p.consumers){
-          const st=await c.getStats();
-          st.forEach(r=>{
-            if(r.type==='inbound-rtp' && !r.isRemote){
-              if(c.kind==='video'){ vBytes+=(r.bytesReceived||0); lost+=(r.packetsLost||0); rx+=(r.packetsReceived||0); }
-              if(c.kind==='audio'){ aBytes+=(r.bytesReceived||0); }
-            }
-          });
-        }
-      }catch{ return; }
-      const now=performance.now(), last=p.lastStats||{};
-      const dt= last.t ? (now-last.t) : 1000;
-      const vb=Math.max(0, vBytes-(last.vBytes||0));
-      const ab=Math.max(0, aBytes-(last.aBytes||0));
-      const bitrateKbps = (vb*8/dt);
-      const abitrateKbps = (ab*8/dt);
-      const fps = getFps(p.videoEl);
-      const vw=p.videoEl.videoWidth||0, vh=p.videoEl.videoHeight||0;
-      const loss=(rx+lost)? (lost/(rx+lost)*100) : 0;
-
-      p.lastStats={ t:now, vBytes, aBytes };
-      const card=p.el;
-      card.querySelector('[data-bitrate]').textContent=`${bitrateKbps.toFixed(0)} kbps`;
-      card.querySelector('[data-fps]').textContent=`${fps.toFixed(0)} fps`;
-      card.querySelector('[data-size]').textContent=`${vw}×${vh}`;
-      card.querySelector('[data-pl]').textContent=`${loss.toFixed(1)}% loss`;
-      const vPct=Math.min(100, bitrateKbps/6000*100), aPct=Math.min(100, abitrateKbps/320*100);
-      card.querySelector('[data-meter-v]').style.width=`${vPct}%`;
-      card.querySelector('[data-meter-a]').style.width=`${aPct}%`;
-      const vTxt=card.querySelector('[data-meter-v-text]');
-      const aTxt=card.querySelector('[data-meter-a-text]');
-      if(vTxt) vTxt.textContent = `${Math.max(0,bitrateKbps).toFixed(0)} kbps`;
-      if(aTxt) aTxt.textContent = `${Math.max(0,abitrateKbps).toFixed(0)} kbps`;
-    }
-    const rvfcMap=new Map();
-    function attachRVFC(video){
-      if('requestVideoFrameCallback' in HTMLVideoElement.prototype){
-        const meta={frames0:0,frames:0,t0:performance.now()}; rvfcMap.set(video,meta);
-        const cb=(_ts,m)=>{ meta.frames=m.presentedFrames; if(!meta.frames0) meta.frames0=meta.frames; video.requestVideoFrameCallback(cb); };
-        video.requestVideoFrameCallback(cb);
-      }
-    }
-    function getFps(video){
-      const meta=rvfcMap.get(video); if(!meta) return 0;
-      const dt=(performance.now()-meta.t0)/1000;
-      const frames=Math.max(0,(meta.frames||0)-(meta.frames0||0));
-      return dt>0? frames/dt : 0;
-    }
-
-    /* ---------- Snapshot ---------- */
-    function downloadSnapshot(video,id){
-      const w=video.videoWidth,h=video.videoHeight;
-      if(!w||!h){ toast('No video frame to capture','warn'); return; }
-      const c=document.createElement('canvas'); c.width=w; c.height=h;
-      c.getContext('2d').drawImage(video,0,0,w,h);
-      const url=c.toDataURL('image/png'); const a=document.createElement('a'); const ts=new Date().toISOString().replace(/[:.]/g,'-');
-      a.href=url; a.download=`${id}_${ts}.png`; document.body.appendChild(a); a.click(); a.remove();
-      toast('Screenshot saved');
-    }
-
-    /* ---------- Focus mode ---------- */
-    function enterFocusMode(id){
-      const p=players.get(id); if(!p) return;
-      if(focus.id) exitFocusMode();
-      focus.placeholder=document.createElement('div'); focus.placeholder.style.display='none';
-      p.el.parentElement.insertBefore(focus.placeholder, p.el);
-      focusHost.appendChild(p.el);
-      focus.id=id;
-      document.getElementById('focus').classList.add('show');
-    }
-    function exitFocusMode(){
-      if(!focus.id) return;
-      const p=players.get(focus.id);
-      if(p && focus.placeholder && focus.placeholder.parentElement){
-        focus.placeholder.parentElement.insertBefore(p.el, focus.placeholder);
-        focus.placeholder.remove();
-      }
-      focus.id=null; focus.placeholder=null;
-      document.getElementById('focus').classList.remove('show');
-    }
-    document.getElementById('exitFocus').onclick=exitFocusMode;
-    focusEl.addEventListener('dblclick', exitFocusMode);
-
-    /* ---------- Bottom Dock controls ---------- */
-    function muteAll() {
-      const allMuted = Array.from(players.values()).every(({ videoEl }) => videoEl.muted);
-      players.forEach(({ videoEl }) => {
-        videoEl.muted = !allMuted;
-      });
-      console.log('[Client] muteAll toggled:', !allMuted ? 'Muted' : 'Unmuted');
-    }
-    document.querySelector('#muteAll').onclick=muteAll;
-    document.querySelector('#unmuteAll').onclick=()=>{ for(const p of players.values()){ p.videoEl.muted=false; const b=p.el.querySelector('[data-mute]'); if(b) b.textContent='🔊'; } toast('All players unmuted'); };
-    document.querySelector('#stopAll').onclick=stopAll;
-
-    // Auto refresh
-    let autoTimer=null, autoOn=true;
-    const autoBtn=document.querySelector('#autoRefresh');
-    function setAuto(on){
-      autoOn=on; autoBtn.setAttribute('aria-pressed',on?'true':'false');
-      if(autoTimer){ clearInterval(autoTimer); autoTimer=null; }
-      if(on) autoTimer=setInterval(refreshList,5000);
-    }
-    autoBtn.onclick=()=>setAuto(!autoOn);
-
-    /* ---------- Utils & Init ---------- */
-    function escapeHtml(s=''){ return s.replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
-    refreshList(); setAuto(true);
-  </script>
+  <script type="module" src="app.js"></script>
 </body>
+
 </html>
